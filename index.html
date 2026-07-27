@@ -365,4 +365,520 @@
 <!-- ============ MODAL: add task ============ -->
 <div id="taskModal" class="fixed inset-0 z-50 hidden">
   <div class="absolute inset-0 modal-backdrop" data-close-modal></div>
-  <div class="absolute bottom-0 left-0 right-0 max-w-md mx-auto bg-[var(--c-card)] round
+  <div class="absolute bottom-0 left-0 right-0 max-w-md mx-auto bg-[var(--c-card)] rounded-t-[28px] p-6 sheet" style="padding-bottom: calc(28px + env(safe-area-inset-bottom));">
+    <div class="w-10 h-1.5 bg-[var(--c-line)] rounded-full mx-auto mb-5"></div>
+    <h3 class="font-display font-semibold text-lg">Nova meta do dia</h3>
+    <p class="text-[13px] text-[var(--c-muted)] mt-0.5 mb-4">Ela entra na sua trilha semanal de metas.</p>
+    <input id="newTaskInput" type="text" placeholder="Ex: Estudar Ecologia" class="w-full rounded-2xl border border-[var(--c-line)] bg-[var(--c-bg)] p-3.5 text-[14px] focus:outline-none focus:ring-2 focus:ring-indigo-600/40" maxlength="60">
+    <div class="flex gap-2 mt-3 flex-wrap" id="taskAreaChips"></div>
+    <button id="confirmAddTask" class="w-full h-12 rounded-2xl brand-gradient text-white font-semibold text-sm mt-5">Adicionar meta</button>
+  </div>
+</div>
+
+<!-- ============ MODAL: exam date ============ -->
+<div id="dateModal" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 modal-backdrop" data-close-modal></div>
+  <div class="absolute bottom-0 left-0 right-0 max-w-md mx-auto bg-[var(--c-card)] rounded-t-[28px] p-6 sheet" style="padding-bottom: calc(28px + env(safe-area-inset-bottom));">
+    <div class="w-10 h-1.5 bg-[var(--c-line)] rounded-full mx-auto mb-5"></div>
+    <h3 class="font-display font-semibold text-lg">Data da prova</h3>
+    <p class="text-[13px] text-[var(--c-muted)] mt-0.5 mb-4">O ENEM 2026 será aplicado em 08 e 15 de novembro. Ajuste se necessário.</p>
+    <input id="examDateInput" type="date" class="w-full rounded-2xl border border-[var(--c-line)] bg-[var(--c-bg)] p-3.5 text-[14px] focus:outline-none focus:ring-2 focus:ring-indigo-600/40">
+    <button id="confirmExamDate" class="w-full h-12 rounded-2xl brand-gradient text-white font-semibold text-sm mt-5">Salvar data</button>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   RUMO — ENEM PWA
+   Estado persistido em localStorage; sem dependências além do Tailwind CDN.
+   ========================================================================= */
+
+const STORAGE_KEY = 'rumo_enem_state_v1';
+
+const AREAS = {
+  matematica: {
+    label: 'Matemática', icon: '📐', color: '#4F46E5',
+    topics: ['Razão e Proporção', 'Estatística (média, moda, mediana)', 'Geometria Plana e Espacial', 'Funções do 1º e 2º grau', 'Porcentagem e Juros']
+  },
+  linguagens: {
+    label: 'Linguagens', icon: '📝', color: '#7C3AED',
+    topics: ['Interpretação de Texto e Gêneros Textuais', 'Funções da Linguagem', 'Literatura — Modernismo', 'Figuras de Linguagem', 'Variação Linguística']
+  },
+  humanas: {
+    label: 'Humanas', icon: '🌍', color: '#F59E0B',
+    topics: ['Brasil República (Vargas e Ditadura Militar)', 'Urbanização e Meio Ambiente', 'Cidadania e Direitos Humanos', 'Globalização e Geopolítica', 'Revolução Industrial e Capitalismo']
+  },
+  natureza: {
+    label: 'Natureza', icon: '🧬', color: '#10B981',
+    topics: ['Ecologia e Cadeias Alimentares', 'Energia e suas Transformações', 'Química Orgânica e Ambiental', 'Genética e Evolução', 'Eletricidade e Eletromagnetismo']
+  },
+};
+
+const ESSAY_CRITERIA = [
+  { id: 'intro', label: 'Introdução com tese clara' },
+  { id: 'dev1', label: 'Desenvolvimento 1 — argumento + repertório' },
+  { id: 'dev2', label: 'Desenvolvimento 2 — argumento + repertório' },
+  { id: 'proposta', label: 'Proposta de intervenção completa (agente, ação, meio, finalidade, detalhamento)' },
+];
+
+const DEFAULT_TASKS = [
+  { id: 't1', text: 'Estudar Ecologia', area: 'natureza', done: false },
+  { id: 't2', text: 'Fazer Redação — treino de tese', area: 'linguagens', done: false },
+  { id: 't3', text: 'Revisar Razão e Proporção', area: 'matematica', done: false },
+  { id: 't4', text: 'Ler sobre Era Vargas', area: 'humanas', done: false },
+];
+
+function defaultState() {
+  return {
+    goalsTotal: 12,
+    weekKey: getWeekKey(),
+    tasks: DEFAULT_TASKS,
+    contentStatus: {},
+    essay: { checklist: {}, repertoire: '' },
+    examDate: '2026-11-08',
+    questionsCount: 0,
+    questionsDay: getDayKey(),
+    simuladoDate: '',
+    pomoCycles: 0,
+    pomoCyclesDay: getDayKey(),
+  };
+}
+
+function getWeekKey() {
+  const d = new Date();
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d - onejan) / 86400000) + onejan.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${week}`;
+}
+function getDayKey() { return new Date().toISOString().slice(0, 10); }
+
+let state = loadState();
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    const parsed = { ...defaultState(), ...JSON.parse(raw) };
+    // reset semanal
+    if (parsed.weekKey !== getWeekKey()) {
+      parsed.weekKey = getWeekKey();
+      parsed.tasks = parsed.tasks.map(t => ({ ...t, done: false }));
+    }
+    // reset diário do contador de questões e ciclos pomodoro
+    if (parsed.questionsDay !== getDayKey()) { parsed.questionsDay = getDayKey(); parsed.questionsCount = 0; }
+    if (parsed.pomoCyclesDay !== getDayKey()) { parsed.pomoCyclesDay = getDayKey(); parsed.pomoCycles = 0; }
+    return parsed;
+  } catch (e) { return defaultState(); }
+}
+
+function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  el.classList.remove('opacity-0', 'pointer-events-none');
+  el.classList.add('opacity-100');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => {
+    el.classList.add('opacity-0', 'pointer-events-none');
+    el.classList.remove('opacity-100');
+  }, 1800);
+}
+
+/* ---------------------------- NAVEGAÇÃO ---------------------------- */
+const panels = ['dashboard', 'conteudos', 'redacao', 'simulados'];
+const headerCopy = {
+  dashboard: { eyebrow: 'Painel de estudos', title: 'Bom estudo 👋', sub: 'Organize suas metas e tarefas do dia.' },
+  conteudos: { eyebrow: 'Conteúdo programático', title: 'Conteúdos em foco', sub: 'O que mais cai, por área do conhecimento.' },
+  redacao: { eyebrow: 'Competência escrita', title: 'Área da redação', sub: 'Estrutura, prazo e repertório sempre à mão.' },
+  simulados: { eyebrow: 'Prática ativa', title: 'Simulados e revisão', sub: 'Cronômetro, questões e seu próximo simulado.' },
+};
+
+function goToPanel(name) {
+  panels.forEach(p => {
+    document.getElementById('panel-' + p).classList.toggle('active', p === name);
+  });
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
+  const c = headerCopy[name];
+  document.getElementById('headerEyebrow').textContent = c.eyebrow;
+  document.getElementById('headerTitle').textContent = c.title;
+  document.getElementById('headerSubtitle').textContent = c.sub;
+  document.getElementById('fabAdd').style.display = name === 'dashboard' ? 'grid' : 'none';
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+}
+
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => goToPanel(btn.dataset.panel));
+});
+
+/* ---------------------------- DASHBOARD ---------------------------- */
+function renderDashboard() {
+  const total = state.goalsTotal;
+  const done = state.tasks.filter(t => t.done).length;
+  const filled = Math.min(done, total);
+
+  document.getElementById('goalsDone').textContent = done;
+  document.getElementById('goalsTotal').textContent = total;
+  document.getElementById('goalsPercent').textContent = Math.round((filled / total) * 100) + '%';
+
+  const track = document.getElementById('goalTrack');
+  track.innerHTML = '';
+  for (let i = 0; i < total; i++) {
+    const seg = document.createElement('div');
+    seg.className = 'goal-seg' + (i < filled ? ' filled' : '');
+    track.appendChild(seg);
+  }
+
+  const list = document.getElementById('taskList');
+  const empty = document.getElementById('emptyTasks');
+  list.innerHTML = '';
+  if (state.tasks.length === 0) {
+    empty.classList.remove('hidden');
+  } else {
+    empty.classList.add('hidden');
+    state.tasks.forEach(task => {
+      const area = AREAS[task.area];
+      const row = document.createElement('div');
+      row.className = 'bg-[var(--c-card)] rounded-2xl border border-[var(--c-line)] p-3.5 flex items-center gap-3';
+      row.innerHTML = `
+        <input type="checkbox" class="chk" data-id="${task.id}" ${task.done ? 'checked' : ''}>
+        <div class="flex-1 min-w-0">
+          <p class="task-text text-[14.5px] font-medium ${task.done ? 'done' : ''}">${escapeHtml(task.text)}</p>
+          ${area ? `<span class="text-[11px] font-medium" style="color:${area.color}">${area.icon} ${area.label}</span>` : ''}
+        </div>
+        <button data-del="${task.id}" class="text-[var(--c-faint)] hover:text-danger p-1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>`;
+      list.appendChild(row);
+    });
+  }
+
+  const pending = state.tasks.filter(t => !t.done).length;
+  document.getElementById('taskCountLabel').textContent = pending === 0 && state.tasks.length > 0
+    ? 'tudo concluído 🎉' : `${pending} pendente${pending === 1 ? '' : 's'}`;
+}
+
+document.getElementById('taskList').addEventListener('click', (e) => {
+  const chk = e.target.closest('.chk');
+  const del = e.target.closest('[data-del]');
+  if (chk) {
+    const t = state.tasks.find(x => x.id === chk.dataset.id);
+    if (t) t.done = chk.checked;
+    saveState(); renderDashboard();
+    if (chk.checked) toast('Meta concluída ✔');
+  }
+  if (del) {
+    state.tasks = state.tasks.filter(x => x.id !== del.dataset.del);
+    saveState(); renderDashboard();
+  }
+});
+
+/* Modal: add task */
+const taskModal = document.getElementById('taskModal');
+let selectedArea = null;
+function openTaskModal() {
+  document.getElementById('newTaskInput').value = '';
+  selectedArea = null;
+  const chips = document.getElementById('taskAreaChips');
+  chips.innerHTML = Object.entries(AREAS).map(([key, a]) =>
+    `<button type="button" data-area="${key}" data-color="${a.color}" class="area-chip px-3 py-1.5 rounded-full border border-[var(--c-line)] text-[12.5px] font-medium" style="color:${a.color}">${a.icon} ${a.label}</button>`
+  ).join('');
+  taskModal.classList.remove('hidden');
+  document.getElementById('newTaskInput').focus();
+}
+document.getElementById('fabAdd').addEventListener('click', openTaskModal);
+document.getElementById('taskAreaChips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.area-chip');
+  if (!chip) return;
+  selectedArea = chip.dataset.area === selectedArea ? null : chip.dataset.area;
+  document.querySelectorAll('.area-chip').forEach(c => {
+    const active = c.dataset.area === selectedArea;
+    c.style.background = active ? c.dataset.color : '';
+    c.style.color = active ? '#fff' : c.dataset.color;
+    c.classList.toggle('border-transparent', active);
+  });
+});
+document.getElementById('confirmAddTask').addEventListener('click', () => {
+  const val = document.getElementById('newTaskInput').value.trim();
+  if (!val) { toast('Digite o nome da meta'); return; }
+  state.tasks.push({ id: 't' + Date.now(), text: val, area: selectedArea, done: false });
+  saveState(); renderDashboard();
+  closeModals();
+  toast('Meta adicionada');
+});
+
+function closeModals() {
+  document.querySelectorAll('.modal-backdrop').forEach(b => b.closest('.fixed').classList.add('hidden'));
+}
+document.querySelectorAll('[data-close-modal]').forEach(el => el.addEventListener('click', closeModals));
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* ---------------------------- CONTEÚDOS ---------------------------- */
+function statusOf(areaKey, idx) {
+  return state.contentStatus[`${areaKey}-${idx}`] || 'nao';
+}
+function setStatus(areaKey, idx, val) {
+  state.contentStatus[`${areaKey}-${idx}`] = val;
+  saveState();
+}
+const STATUS_LABEL = { nao: 'Não iniciado', andamento: 'Em andamento', concluido: 'Concluído' };
+const STATUS_CYCLE = { nao: 'andamento', andamento: 'concluido', concluido: 'nao' };
+
+function renderAreaGrid() {
+  const grid = document.getElementById('areaGrid');
+  grid.innerHTML = '';
+  Object.entries(AREAS).forEach(([key, a]) => {
+    const doneCount = a.topics.filter((_, i) => statusOf(key, i) === 'concluido').length;
+    const card = document.createElement('button');
+    card.className = 'area-card bg-[var(--c-card)] rounded-2xl border border-[var(--c-line)] p-4 text-left shadow-sm';
+    card.dataset.area = key;
+    card.innerHTML = `
+      <div class="w-10 h-10 rounded-xl grid place-content-center text-lg mb-3" style="background:${a.color}1A">${a.icon}</div>
+      <p class="font-display font-semibold text-[15px]">${a.label}</p>
+      <p class="text-[12px] text-[var(--c-muted)] mt-0.5">${doneCount}/${a.topics.length} concluídos</p>`;
+    grid.appendChild(card);
+  });
+}
+
+document.getElementById('areaGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('.area-card');
+  if (!card) return;
+  openTopicView(card.dataset.area);
+});
+document.getElementById('backToAreas').addEventListener('click', () => {
+  document.getElementById('topicView').classList.add('hidden');
+  document.getElementById('areaGrid').classList.remove('hidden');
+});
+
+function openTopicView(areaKey) {
+  const a = AREAS[areaKey];
+  document.getElementById('areaGrid').classList.add('hidden');
+  document.getElementById('topicView').classList.remove('hidden');
+  document.getElementById('topicIcon').textContent = a.icon;
+  document.getElementById('topicIcon').style.background = a.color + '1A';
+  document.getElementById('topicAreaName').textContent = a.label;
+
+  const list = document.getElementById('topicList');
+  list.innerHTML = '';
+  a.topics.forEach((topic, idx) => {
+    const st = statusOf(areaKey, idx);
+    const row = document.createElement('button');
+    row.className = 'w-full bg-[var(--c-card)] rounded-2xl border border-[var(--c-line)] p-3.5 flex items-center justify-between text-left';
+    row.dataset.area = areaKey; row.dataset.idx = idx;
+    row.innerHTML = `
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="font-mono-num text-[12px] text-[var(--c-faint)] w-4">${idx + 1}</span>
+        <p class="text-[14px] font-medium truncate pr-2">${topic}</p>
+      </div>
+      <span class="status-chip status-${st} flex-shrink-0">${STATUS_LABEL[st]}</span>`;
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('topicList').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-area]');
+  if (!row) return;
+  const areaKey = row.dataset.area, idx = row.dataset.idx;
+  const next = STATUS_CYCLE[statusOf(areaKey, idx)];
+  setStatus(areaKey, idx, next);
+  openTopicView(areaKey);
+  renderAreaGrid();
+});
+
+/* ---------------------------- REDAÇÃO ---------------------------- */
+function renderEssay() {
+  const list = document.getElementById('essayChecklist');
+  list.innerHTML = '';
+  ESSAY_CRITERIA.forEach(c => {
+    const checked = !!state.essay.checklist[c.id];
+    const row = document.createElement('label');
+    row.className = 'flex items-center gap-3 cursor-pointer';
+    row.innerHTML = `
+      <input type="checkbox" class="chk" data-essay="${c.id}" ${checked ? 'checked' : ''}>
+      <span class="text-[14px] ${checked ? 'text-[var(--c-muted)] line-through' : ''}">${c.label}</span>`;
+    list.appendChild(row);
+  });
+  document.getElementById('repertoireArea').value = state.essay.repertoire || '';
+  document.getElementById('examDateLabel').textContent = formatDateBR(state.examDate);
+}
+
+document.getElementById('essayChecklist').addEventListener('change', (e) => {
+  const chk = e.target.closest('[data-essay]');
+  if (!chk) return;
+  state.essay.checklist[chk.dataset.essay] = chk.checked;
+  saveState(); renderEssay();
+});
+
+let repDebounce;
+document.getElementById('repertoireArea').addEventListener('input', (e) => {
+  clearTimeout(repDebounce);
+  repDebounce = setTimeout(() => {
+    state.essay.repertoire = e.target.value;
+    saveState();
+  }, 300);
+});
+
+function formatDateBR(iso) {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+document.getElementById('editExamDate').addEventListener('click', () => {
+  document.getElementById('examDateInput').value = state.examDate;
+  document.getElementById('dateModal').classList.remove('hidden');
+});
+document.getElementById('confirmExamDate').addEventListener('click', () => {
+  const val = document.getElementById('examDateInput').value;
+  if (!val) { toast('Escolha uma data'); return; }
+  state.examDate = val;
+  saveState(); renderEssay(); updateCountdown();
+  closeModals();
+  toast('Data atualizada');
+});
+
+function updateCountdown() {
+  const target = new Date(state.examDate + 'T09:00:00');
+  const now = new Date();
+  let diff = Math.max(0, target - now);
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  const secs = Math.floor((diff % 60000) / 1000);
+  document.getElementById('cdDays').textContent = String(days).padStart(2, '0');
+  document.getElementById('cdHours').textContent = String(hours).padStart(2, '0');
+  document.getElementById('cdMin').textContent = String(mins).padStart(2, '0');
+  document.getElementById('cdSec').textContent = String(secs).padStart(2, '0');
+}
+setInterval(updateCountdown, 1000);
+
+/* ---------------------------- SIMULADOS ---------------------------- */
+const POMO_TOTAL = 25 * 60;
+let pomoRemaining = POMO_TOTAL;
+let pomoRunning = false;
+let pomoInterval = null;
+const RING_CIRC = 439.8;
+
+function renderPomo() {
+  const m = Math.floor(pomoRemaining / 60), s = pomoRemaining % 60;
+  document.getElementById('pomoTime').textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const offset = RING_CIRC * (pomoRemaining / POMO_TOTAL);
+  document.getElementById('pomoRing').style.strokeDashoffset = offset;
+  document.getElementById('pomoToggle').textContent = pomoRunning ? 'Pausar' : (pomoRemaining < POMO_TOTAL ? 'Retomar' : 'Iniciar sessão');
+  document.getElementById('pomoLabel').textContent = pomoRunning ? 'EM FOCO — NÃO INTERROMPA' : 'SESSÃO DE ESTUDO';
+  document.getElementById('pomoCycles').textContent = `${state.pomoCycles} ciclo${state.pomoCycles === 1 ? '' : 's'} concluído${state.pomoCycles === 1 ? '' : 's'} hoje`;
+}
+
+function tickPomo() {
+  pomoRemaining--;
+  if (pomoRemaining <= 0) {
+    pomoRemaining = 0;
+    stopPomo();
+    state.pomoCycles++;
+    saveState();
+    playBeep();
+    toast('Ciclo concluído! Faça uma pausa 🎉');
+    setTimeout(() => { pomoRemaining = POMO_TOTAL; renderPomo(); }, 1500);
+  }
+  renderPomo();
+}
+
+function startPomo() {
+  pomoRunning = true;
+  pomoInterval = setInterval(tickPomo, 1000);
+  renderPomo();
+}
+function stopPomo() {
+  pomoRunning = false;
+  clearInterval(pomoInterval);
+  renderPomo();
+}
+document.getElementById('pomoToggle').addEventListener('click', () => {
+  pomoRunning ? stopPomo() : startPomo();
+});
+document.getElementById('pomoReset').addEventListener('click', () => {
+  stopPomo();
+  pomoRemaining = POMO_TOTAL;
+  renderPomo();
+});
+
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.start(); osc.stop(ctx.currentTime + 0.6);
+  } catch (e) {}
+}
+
+/* Questions counter */
+function renderQuestions() {
+  document.getElementById('qCount').textContent = state.questionsCount;
+}
+document.getElementById('qPlus').addEventListener('click', () => {
+  state.questionsCount++; saveState(); renderQuestions();
+});
+document.getElementById('qMinus').addEventListener('click', () => {
+  state.questionsCount = Math.max(0, state.questionsCount - 1); saveState(); renderQuestions();
+});
+
+/* Next simulado */
+function renderSimulado() {
+  const input = document.getElementById('simuladoDate');
+  input.value = state.simuladoDate || '';
+  const info = document.getElementById('simuladoInfo');
+  if (!state.simuladoDate) { info.textContent = ''; return; }
+  const diff = Math.ceil((new Date(state.simuladoDate) - new Date(getDayKey())) / 86400000);
+  info.textContent = diff > 0 ? `Faltam ${diff} dia${diff === 1 ? '' : 's'} para o simulado.`
+    : diff === 0 ? 'É hoje! Boa prova 💪' : 'Data já passou — hora de agendar o próximo.';
+}
+document.getElementById('simuladoDate').addEventListener('change', (e) => {
+  state.simuladoDate = e.target.value;
+  saveState(); renderSimulado();
+});
+
+/* ---------------------------- TEMA CLARO/ESCURO ---------------------------- */
+function applyThemeIcons() {
+  const isDark = document.documentElement.classList.contains('dark');
+  document.getElementById('themeIconSun').classList.toggle('hidden', !isDark);
+  document.getElementById('themeIconMoon').classList.toggle('hidden', isDark);
+}
+document.getElementById('themeToggle').addEventListener('click', () => {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('rumo_theme', isDark ? 'dark' : 'light');
+  applyThemeIcons();
+});
+applyThemeIcons();
+
+/* ---------------------------- INIT ---------------------------- */
+function renderAll() {
+  renderDashboard();
+  renderAreaGrid();
+  renderEssay();
+  renderPomo();
+  renderQuestions();
+  renderSimulado();
+  updateCountdown();
+}
+renderAll();
+goToPanel('dashboard');
+
+/* ---------------------------- SERVICE WORKER ---------------------------- */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      /* Registro silencioso — falha esperada quando aberto via file:// */
+    });
+  });
+}
+</script>
+</body>
+</html>
